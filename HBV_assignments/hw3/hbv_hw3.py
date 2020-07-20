@@ -1,0 +1,170 @@
+%matplotlib inline
+import pymc3 as pm
+import numpy as np
+import pandas as pd
+import theano
+from scipy import stats
+from sklearn import preprocessing
+
+import matplotlib.pyplot as plt
+import altair as alt
+alt.data_transformers.enable('default', max_rows=None)
+import arviz as az
+
+import warnings
+warnings.filterwarnings('ignore')
+
+d = pd.read_csv('../../data/foxes.csv', sep=';', header=0); 
+d[['avgfood','groupsize','area','weight']] = preprocessing.scale(d[['avgfood','groupsize','area','weight']]);
+
+#%%
+#QUESTION 1
+
+with pm.Model() as model_1:
+    # Data
+    area = pm.Data('area', d['area'].values)
+    weight = pm.Data('weight', d['weight'].values)
+    
+    # Priors
+    alpha = pm.Normal('alpha', mu=0, sd=0.2)
+    beta = pm.Normal('beta', mu=0, sd=0.5)
+    sigma = pm.Uniform('sigma', lower=0, upper=2)
+    
+    # Regression
+    mu = alpha + beta * area
+    weight_hat = pm.Normal('weight_hat', mu=mu, sd=sigma, observed=weight)
+    
+    # Prior sampling, trace definition and posterior sampling
+    prior = pm.sample_prior_predictive(samples = 30)
+    posterior_1 = pm.sample()
+    posterior_pred_1 = pm.sample_posterior_predictive(posterior_1)
+
+pm.traceplot(posterior_1);
+
+data = az.from_pymc3(trace=posterior_1,
+                    prior=prior,
+                    posterior_predictive=posterior_pred_1)
+data
+
+az.style.use('arviz-darkgrid')
+
+fig, axes = az.plot_forest(data,
+                        kind='ridgeplot',
+                        combined=False,
+                        ridgeplot_overlap=2,
+                        colors='white',
+                        figsize=(10, 3))
+axes[0].set_title('model_1 posteriors parameters distributions');
+
+df = pd.DataFrame()
+df = df.assign(alpha = pd.Series(prior['alpha']),
+               sigma = pd.Series(prior['sigma']),
+               beta = pd.Series(prior['beta']))
+df.head()
+
+priors = pd.DataFrame()
+
+for i in range(df.shape[0]):
+    priors['prior_'+str(i)] = df.loc[i,'alpha'] + df.loc[i,'beta'] * d['area']
+
+
+
+aux = pd.concat([d.area, priors], axis=1)
+aux_plot = aux.melt(id_vars=['area'],
+                  value_vars=list(aux.columns)[1:],
+                  var_name='prior',
+                  value_name='weight')
+
+
+
+plot = alt.Chart(aux_plot)\
+   .mark_line()\
+   .encode(
+        x=alt.X('area', title='area'),
+        y=alt.Y('weight', title='weight'),
+        color=alt.Color('prior', legend=None)
+          )
+
+plot
+
+#%%
+#QUESTION 2
+
+with pm.Model() as model_2:
+    # Data
+    avgfood = pm.Data('avgfood', d['avgfood'].values)
+    weight = pm.Data('weight', d['weight'].values)
+    
+    # Priors
+    alpha = pm.Normal('alpha', mu=0, sd=0.2)
+    beta = pm.Normal('beta', mu=0, sd=0.5)
+    sigma = pm.Uniform('sigma', lower=0, upper=2)
+    
+    # Regression
+    mu = alpha + beta * avgfood
+    weight_hat = pm.Normal('weight_hat', mu=mu, sd=sigma, observed=weight)
+    
+    # prior sampling, trace definition and posterior sampling
+    prior = pm.sample_prior_predictive(samples = 30)
+    posterior_2 = pm.sample()
+    posterior_pred_2 = pm.sample_posterior_predictive(posterior_2)
+
+    
+
+az.summary(posterior_2, credible_interval=.89).round(2)
+pm.traceplot(posterior_2);
+
+#Question 3
+
+with pm.Model() as model_3:
+    # Data
+    avgfood = pm.Data('avgfood', d['avgfood'].values)
+    groupsize = pm.Data('groupsize', d['groupsize'].values)
+    weight = pm.Data('weight', d['weight'].values)
+    
+    # Priors
+    alpha = pm.Normal('alpha', mu=0, sd=0.2)
+    beta = pm.Normal('beta', mu=0, sd=0.5, shape=2) # In the solutions these are called bF and bG, here is just beta with two dimensions
+    sigma = pm.Uniform('sigma', lower=0, upper=2)    
+    
+    # Regression
+    mu = alpha + beta[0] * avgfood + beta[1] * groupsize
+    weight_hat = pm.Normal('weight_hat', mu=mu, sd=sigma, observed=weight)
+    
+    # Prior sampling, trace definition and posterior sampling
+    prior = pm.sample_prior_predictive(samples = 30)
+    posterior_3 = pm.sample()
+    posterior_pred_3 = pm.sample_posterior_predictive(posterior_3)
+
+az.summary(posterior_3, credible_interval=.89).round(2)
+pm.traceplot(posterior_3);
+
+data = az.from_pymc3(trace=posterior_3,
+                     prior=prior,
+                     posterior_predictive=posterior_pred_3)
+data
+
+
+
+az.style.use('arviz-darkgrid')
+
+fig, axes = az.plot_forest(data,
+                           kind='ridgeplot',
+                           combined=False,
+                           ridgeplot_overlap=1,
+                           colors='white',
+                           figsize=(10, 3))
+axes[0].set_title('model_3 posteriors parameters distributions');
+
+The direct effect of avgfood is actually positive! But since it is controlled by the negative effect of groupsize the total effect of avgfood on weight is nothing.
+
+#It looks like groupsize is negatively associated with weight, controlling for avgfood. 
+#Similarly, avgfood is positively associated with weight, controlling for groupsize.
+#So the causal influence of groupsize is to reduce weight — less food for each fox. 
+#And the direct causal influence of avgfood is positive, of course. 
+#But the total causal influence of avgfood is still nothing, since it causes larger groups. 
+#This is a masking effect, like in the milk energy example. 
+#But the causal explanation here is that more foxes move into a territory until the food available to each is no better than the food in a neighboring territory. 
+#Every territory ends up equally good/bad on average. 
+#This is known in behavioral ecology as an ideal free distribution.
+
